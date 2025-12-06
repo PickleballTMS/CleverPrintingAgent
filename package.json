@@ -1,0 +1,46 @@
+{
+  "name": "clever-printing-agent",
+  "version": "1.0.0",
+  "description": "Electron-based local printing agent/spooler for tournament management system",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "electron",
+    "printing",
+    "spooler",
+    "tournament"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2"
+  },
+  "build": {
+    "appId": "com.cleverprinting.agent",
+    "productName": "Clever Printing Agent",
+    "icon": "assets/icon.png",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  }
+}
+

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clever Printing Agent</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>
+                <img src="logo.png" alt="Logo" class="header-logo">
+                Clever Printing Agent
+            </h1>
+            <div class="status-indicator">
+                <span id="status-dot" class="status-dot"></span>
+                <span id="status-text">Initializing...</span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <section class="info-panel">
+                    <h2>Spooler Status</h2>
+                    <div class="stat-item">
+                        <label>Queue Length:</label>
+                        <span id="queue-length">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>Processing:</label>
+                        <span id="processing-status">No</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>Default Printer:</label>
+                        <span id="default-printer">Not set</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>API Port:</label>
+                        <span id="api-port">3001</span>
+                    </div>
+                </section>
+
+                <section class="actions-panel">
+                    <h2>Actions</h2>
+                    <button id="select-printer-btn" class="btn btn-primary">Select Printer</button>
+                    <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
+                    <button id="clear-completed-btn" class="btn btn-secondary">Clear Completed</button>
+                </section>
+
+                <section class="api-info">
+                    <h2>API Endpoint</h2>
+                    <div class="api-endpoint">
+                        <code>POST http://localhost:<span id="api-port-display">3001</span>/api/print</code>
+                    </div>
+                    <div class="api-example">
+                        <details>
+                            <summary>Example Request</summary>
+                            <pre><code>{
+  "html": "&lt;h1&gt;Hello World&lt;/h1&gt;",
+  "priority": "normal",
+  "copies": 1
+}</code></pre>
+                        </details>
+                    </div>
+                </section>
+            </div>
+
+            <div class="content-area">
+                <div class="jobs-header">
+                    <h2>Print Jobs</h2>
+                    <div class="filter-buttons">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="queued">Queued</button>
+                        <button class="filter-btn" data-filter="processing">Processing</button>
+                        <button class="filter-btn" data-filter="completed">Completed</button>
+                        <button class="filter-btn" data-filter="failed">Failed</button>
+                    </div>
+                </div>
+
+                <div id="jobs-list" class="jobs-list">
+                    <div class="empty-state">
+                        <p>No print jobs in queue</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
+
