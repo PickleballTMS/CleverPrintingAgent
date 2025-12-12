@@ -265,6 +265,12 @@ ipcMain.handle('get-config', async () => {
 
 ipcMain.handle('set-config', async (event, key, value) => {
   configManager.set(key, value);
+  
+  // If SumatraPDF path is updated, reload it in the print spooler
+  if (key === 'sumatraPath' && printSpooler) {
+    printSpooler.reloadSumatraPath();
+  }
+  
   return true;
 });
 
@@ -288,6 +294,54 @@ ipcMain.handle('test-server-connection', async () => {
     serverClient = new ServerClient(configManager);
   }
   return await serverClient.testConnection();
+});
+
+ipcMain.handle('get-platform', async () => {
+  return process.platform;
+});
+
+ipcMain.handle('select-sumatra-path', async () => {
+  try {
+    const { dialog } = require('electron');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select SumatraPDF.exe',
+      filters: [
+        { name: 'Executable Files', extensions: ['exe'] },
+        { name: 'All Files', extensions: ['*'] }
+      ],
+      properties: ['openFile']
+    });
+    
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    
+    const selectedPath = result.filePaths[0];
+    
+    // Validate that it's actually SumatraPDF.exe
+    const path = require('path');
+    const fileName = path.basename(selectedPath).toLowerCase();
+    if (fileName !== 'sumatrapdf.exe' && fileName !== 'sumatrapdf.exe') {
+      const { dialog } = require('electron');
+      const confirm = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Confirm File Selection',
+        message: 'The selected file does not appear to be SumatraPDF.exe',
+        detail: `Selected: ${path.basename(selectedPath)}\n\nDo you want to use this file anyway?`,
+        buttons: ['Yes', 'No'],
+        defaultId: 1
+      });
+      
+      if (confirm.response === 1) {
+        return null;
+      }
+    }
+    
+    return selectedPath;
+  } catch (error) {
+    console.error('Error selecting SumatraPDF path:', error);
+    throw error;
+  }
 });
 
 ipcMain.handle('select-printer', async () => {

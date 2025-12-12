@@ -64,6 +64,24 @@ async function loadConfig() {
             document.getElementById('server-connection-status').textContent = 'Not configured';
             document.getElementById('server-connection-status').style.color = '#6c757d';
         }
+        
+        // Load SumatraPDF path (Windows only)
+        const platform = await window.electronAPI.getPlatform();
+        const sumatraSection = document.getElementById('sumatra-config-section');
+        if (platform === 'win32') {
+            sumatraSection.style.display = 'block';
+            const sumatraPath = config.sumatraPath || '';
+            const sumatraPathInput = document.getElementById('sumatra-path-input');
+            sumatraPathInput.value = sumatraPath;
+            document.getElementById('sumatra-path-display').textContent = sumatraPath || 'Not configured';
+            if (sumatraPath) {
+                sumatraPathInput.style.borderColor = '#4ade80';
+            } else {
+                sumatraPathInput.style.borderColor = '#dee2e6';
+            }
+        } else {
+            sumatraSection.style.display = 'none';
+        }
     } catch (error) {
         console.error('Error loading config:', error);
     }
@@ -190,6 +208,11 @@ function setupEventListeners() {
     // Server URL configuration
     document.getElementById('save-server-url-btn').addEventListener('click', saveServerUrl);
     document.getElementById('test-server-btn').addEventListener('click', checkServerConnection);
+    
+    // SumatraPDF path configuration (Windows only)
+    document.getElementById('browse-sumatra-btn').addEventListener('click', browseSumatraPath);
+    document.getElementById('save-sumatra-btn').addEventListener('click', saveSumatraPath);
+    document.getElementById('clear-sumatra-btn').addEventListener('click', clearSumatraPath);
 }
 
 function setupJobUpdateListener() {
@@ -322,6 +345,53 @@ async function checkServerConnection() {
         const statusEl = document.getElementById('server-connection-status');
         statusEl.textContent = 'Error: ' + (error.message || 'Failed to test connection');
         statusEl.style.color = '#842029';
+    }
+}
+
+async function browseSumatraPath() {
+    try {
+        const path = await window.electronAPI.selectSumatraPath();
+        if (path) {
+            document.getElementById('sumatra-path-input').value = path;
+            document.getElementById('sumatra-path-input').style.borderColor = '#4ade80';
+        }
+    } catch (error) {
+        console.error('Error browsing for SumatraPDF path:', error);
+        alert('Failed to select file: ' + (error.message || 'Unknown error'));
+    }
+}
+
+async function saveSumatraPath() {
+    try {
+        const sumatraPath = document.getElementById('sumatra-path-input').value.trim();
+        await window.electronAPI.setConfig('sumatraPath', sumatraPath);
+        
+        document.getElementById('sumatra-path-display').textContent = sumatraPath || 'Not configured';
+        const input = document.getElementById('sumatra-path-input');
+        
+        if (sumatraPath) {
+            input.style.borderColor = '#4ade80';
+            alert('SumatraPDF path saved successfully!');
+        } else {
+            input.style.borderColor = '#dee2e6';
+            alert('SumatraPDF path cleared.');
+        }
+    } catch (error) {
+        console.error('Error saving SumatraPDF path:', error);
+        alert('Failed to save SumatraPDF path: ' + error.message);
+    }
+}
+
+async function clearSumatraPath() {
+    try {
+        document.getElementById('sumatra-path-input').value = '';
+        await window.electronAPI.setConfig('sumatraPath', '');
+        document.getElementById('sumatra-path-display').textContent = 'Not configured';
+        document.getElementById('sumatra-path-input').style.borderColor = '#dee2e6';
+        alert('SumatraPDF path cleared.');
+    } catch (error) {
+        console.error('Error clearing SumatraPDF path:', error);
+        alert('Failed to clear SumatraPDF path: ' + error.message);
     }
 }
 

@@ -30,6 +30,12 @@
     "body-parser": "^1.20.2"
   },
   "build": {
+    "extraResources": [
+        {
+          "from": "assets/windows/sumatra",
+          "to": "sumatra"
+        }
+      ],
     "appId": "com.cleverprinting.agent",
     "productName": "Clever Printing Agent",
     "icon": "assets/icon.png",
@@ -37,7 +43,7 @@
       "target": [
         {
           "target": "nsis",
-          "arch": [
+          "arch": [ 
             "x64"
           ]
         }

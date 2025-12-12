@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setConfig: (key, value) => ipcRenderer.invoke('set-config', key, value),
   updateServerConfig: () => ipcRenderer.invoke('update-server-config'),
   testServerConnection: () => ipcRenderer.invoke('test-server-connection'),
+  selectSumatraPath: () => ipcRenderer.invoke('select-sumatra-path'),
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
   
   // Listen for job updates
   onJobUpdate: (callback) => {

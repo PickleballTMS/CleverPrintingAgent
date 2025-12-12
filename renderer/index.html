@@ -72,6 +72,31 @@
                     <button id="clear-completed-btn" class="btn btn-secondary">Clear Completed</button>
                 </section>
 
+                <section id="sumatra-config-section" class="info-panel" style="display: none;">
+                    <h2>Windows Settings</h2>
+                    <div class="stat-item">
+                        <label>SumatraPDF Path:</label>
+                        <span id="sumatra-path-display">Not configured</span>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <label for="sumatra-path-input" style="display: block; font-size: 12px; color: #6c757d; margin-bottom: 4px;">
+                            SumatraPDF Path (Windows only):
+                        </label>
+                        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                            <input type="text" id="sumatra-path-input" placeholder="C:\Program Files\SumatraPDF\SumatraPDF.exe" 
+                                   class="server-url-input" style="flex: 1; padding: 8px; border: 1px solid #dee2e6; border-radius: 4px; font-size: 12px;">
+                            <button id="browse-sumatra-btn" class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;">Browse</button>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="save-sumatra-btn" class="btn btn-primary" style="flex: 1; padding: 8px; font-size: 12px;">Save</button>
+                            <button id="clear-sumatra-btn" class="btn btn-secondary" style="flex: 1; padding: 8px; font-size: 12px;">Clear</button>
+                        </div>
+                        <p style="font-size: 11px; color: #6c757d; margin-top: 8px; margin-bottom: 0;">
+                            Optional: Specify the path to SumatraPDF.exe for Windows printing. If not set, the app will use bundled SumatraPDF or fallback to Edge.
+                        </p>
+                    </div>
+                </section>
+
                 <section class="api-info">
                     <h2>API Endpoint</h2>
                     <div class="api-endpoint">

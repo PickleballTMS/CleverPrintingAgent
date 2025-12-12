@@ -13,9 +13,45 @@ class PrintSpooler extends EventEmitter {
     this.currentJob = null;
     this.isProcessing = false;
     this.defaultPrinter = configManager.get('defaultPrinter', null);
+    this.sumatraPath = configManager.get('sumatraPath', null);
     this.maxRetries = configManager.get('maxRetries', 3);
     this.retryDelay = configManager.get('retryDelay', 5000); // 5 seconds
     this.maxQueueSize = configManager.get('maxQueueSize', 100);
+  }
+
+  /**
+   * Resolve SumatraPDF path (Windows only, prefer user-configured)
+   */
+  getSumatraPath() {
+    if (process.platform !== 'win32') return null;
+
+    // 1) User-configured system installation (preferred)
+    if (this.sumatraPath) {
+      try {
+        if (fs.existsSync(this.sumatraPath)) {
+          return this.sumatraPath;
+        } else {
+          console.warn('Configured SumatraPDF path does not exist:', this.sumatraPath);
+        }
+      } catch {}
+    }
+
+    // 2) Bundled / fallback locations
+    const candidates = [
+      path.join(process.resourcesPath || '', 'sumatra', 'SumatraPDF.exe'),
+      path.join(__dirname, '..', '..', 'assets', 'windows', 'sumatra', 'SumatraPDF.exe'),
+      path.join(process.cwd(), 'sumatra', 'SumatraPDF.exe')
+    ];
+
+    for (const p of candidates) {
+      try {
+        if (p && fs.existsSync(p)) {
+          return p;
+        }
+      } catch {}
+    }
+
+    return null;
   }
 
   /**
@@ -287,6 +323,13 @@ class PrintSpooler extends EventEmitter {
   setDefaultPrinter(printerName) {
     this.defaultPrinter = printerName;
     this.configManager.set('defaultPrinter', printerName);
+  }
+
+  /**
+   * Reload SumatraPDF path from config (called when config is updated)
+   */
+  reloadSumatraPath() {
+    this.sumatraPath = this.configManager.get('sumatraPath', null);
   }
 
   /**
@@ -682,16 +725,37 @@ class PrintSpooler extends EventEmitter {
         command = printer
           ? `lp -d "${printer}" -n ${copies} "${pdfPath}"`
           : `lp -n ${copies} "${pdfPath}"`;
-      } 
+      }
       else if (platform === 'win32') {
-        // Windows → native print command
-        const printer = jobData.printerName || this.defaultPrinter;
+        // Windows → Prefer SumatraPDF (if bundled), fallback to Edge kiosk
 
-        // Windows print requires quoted paths and optional printer
-        command = printer
-          ? `print /D:"${printer}" "${pdfPath}"`
-          : `print "${pdfPath}"`;
-      } 
+        const escapedPath = pdfPath.replace(/'/g, "''");
+        const sumatra = this.getSumatraPath();
+
+        if (sumatra) {
+          console.log('Using SumatraPDF for printing:', sumatra);
+
+          const printer = jobData.printerName || this.defaultPrinter;
+
+          command = printer
+            ? `"${sumatra}" -silent -print-to "${printer}" -print-settings "fit,center,paper=auto,bin=auto" "${pdfPath}"`
+            : `"${sumatra}" -silent -print-to-default -print-settings "fit,center,paper=auto,bin=auto" "${pdfPath}"`;
+        } else {
+          console.warn('SumatraPDF not found, falling back to Edge kiosk printing');
+
+          command =
+            `powershell -NoProfile -ExecutionPolicy Bypass -Command ` +
+            `"try { ` +
+              `Start-Process -FilePath '${escapedPath}' -Verb Print -WindowStyle Hidden -ErrorAction Stop; ` +
+            `} catch { ` +
+              `$p = Start-Process 'msedge.exe' ` +
+                `-ArgumentList '--kiosk-printing','--print-to-default-printer','${escapedPath}' ` +
+                `-WindowStyle Hidden -PassThru; ` +
+              `Start-Sleep -Seconds 5; ` +
+              `if ($p -and !$p.HasExited) { $p.CloseMainWindow() | Out-Null; Start-Sleep -Seconds 1; if (!$p.HasExited) { Stop-Process -Id $p.Id -Force } } ` +
+            `}"`;
+        }
+      }
       else {
         throw new Error(`Unsupported platform: ${platform}`);
       }
