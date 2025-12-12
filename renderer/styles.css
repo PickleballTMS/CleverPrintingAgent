@@ -305,6 +305,17 @@ header h1 {
     color: #084298;
 }
 
+.job-status.printing {
+    background: #d0e7ff;
+    color: #06519c;
+    animation: pulse-printing 1.5s infinite;
+}
+
+@keyframes pulse-printing {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
 .job-status.completed {
     background: #d1e7dd;
     color: #0f5132;
@@ -386,6 +397,17 @@ header h1 {
 
 .hidden {
     display: none !important;
+}
+
+.server-url-input {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+}
+
+.server-url-input:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 /* Scrollbar styling */

@@ -25,7 +25,9 @@ class ConfigManager {
       maxRetries: 3,
       retryDelay: 5000,
       maxQueueSize: 100,
-      autoStart: true
+      autoStart: true,
+      serverBaseUrl: '', // Remote server base URL (e.g., 'http://example.com:8080')
+      apiKey: '' // API key for server authentication
     };
   }
 

@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Configuration
   getConfig: () => ipcRenderer.invoke('get-config'),
   setConfig: (key, value) => ipcRenderer.invoke('set-config', key, value),
+  updateServerConfig: () => ipcRenderer.invoke('update-server-config'),
+  testServerConnection: () => ipcRenderer.invoke('test-server-connection'),
   
   // Listen for job updates
   onJobUpdate: (callback) => {

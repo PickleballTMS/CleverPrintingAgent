@@ -3,11 +3,118 @@ const path = require('path');
 const PrintSpooler = require('./spooler/PrintSpooler');
 const APIServer = require('./api/APIServer');
 const ConfigManager = require('./config/ConfigManager');
+const ServerClient = require('./client/ServerClient');
 
 let mainWindow;
 let printSpooler;
 let apiServer;
 let configManager;
+let serverClient;
+// Removed processedServerJobIds - we allow reprocessing since server status updates might not be processed yet
+
+/**
+ * Process jobs received from server
+ */
+async function processServerJobs(jobs) {
+  // Check queue status before processing
+  const status = printSpooler.getStatus();
+  const isQueueFull = status.queueLength >= status.maxQueueSize;
+  
+  if (isQueueFull) {
+    console.warn(`Queue is full (${status.queueLength}/${status.maxQueueSize}). Skipping ${jobs.length} job(s). They will be picked up in the next poll.`);
+    return; // Skip processing - jobs will be picked up in next poll when space is available
+  }
+  
+  console.log(`Received ${jobs.length} job(s) from server`);
+  
+  // Filter out only jobs that are currently in queue (not already processed)
+  // We allow reprocessing because server status updates might not have been processed yet
+  const existingJobIds = new Set();
+  const currentJobs = printSpooler.getJobQueue();
+  currentJobs.forEach(job => {
+    if (job.serverJobId) {
+      existingJobIds.add(job.serverJobId);
+    }
+  });
+  
+  const newJobs = jobs.filter(serverJob => {
+    if (!serverJob.id) {
+      return true; // Process jobs without IDs (shouldn't happen, but be safe)
+    }
+    
+    // Only skip if currently in queue or being processed
+    // Allow reprocessing - server might resend jobs until status is updated
+    if (existingJobIds.has(serverJob.id)) {
+      console.log(`Skipping server job ${serverJob.id} - already in queue or being processed`);
+      return false;
+    }
+    
+    return true;
+  });
+  
+  if (newJobs.length === 0) {
+    console.log('All jobs from server are already in queue or being processed');
+    return;
+  }
+  
+  console.log(`Processing ${newJobs.length} job(s) from server`);
+  
+  for (const serverJob of newJobs) {
+    try {
+      // Convert server job format to local job format
+      const jobData = {
+        pdf: serverJob.pdf,
+        pdfBase64: serverJob.pdfBase64,
+        pdfPath: serverJob.pdfPath,
+        pdfUrl: serverJob.pdfUrl,
+        html: serverJob.html,
+        url: serverJob.url,
+        printerName: serverJob.printerName,
+        priority: serverJob.priority || 'normal',
+        printBackground: serverJob.printBackground !== false,
+        pageSize: serverJob.pageSize || 'A4',
+        margins: serverJob.margins,
+        copies: serverJob.copies || 1,
+        metadata: {
+          ...serverJob.metadata,
+          serverJobId: serverJob.id,
+          fromServer: true
+        }
+      };
+
+      // Add job to local queue
+      const localJob = await printSpooler.addJob(jobData);
+      
+      // Store mapping between server job ID and local job ID
+      if (serverJob.id && localJob.id) {
+        localJob.serverJobId = serverJob.id;
+        // Don't mark as processed - allow reprocessing if server resends
+        // Server will stop sending once status is updated to "printed" or "failed"
+        console.log(`Added server job ${serverJob.id} to queue as local job ${localJob.id}`);
+      }
+    } catch (error) {
+      // Handle queue full error specially - don't mark as failed
+      if (error.message && error.message.includes('queue is full')) {
+        console.warn(`Queue became full while processing jobs. Skipping remaining jobs.`);
+        // Don't update server status - job remains pending and will be retried
+        break; // Stop processing remaining jobs
+      } else {
+        // Actual error - log and mark as failed
+        console.error('Error processing server job:', error);
+        // Send error heartbeat
+        if (serverClient) {
+          serverClient.sendHeartbeat('error', error.message).catch(err => {
+            console.error('Failed to send error heartbeat:', err.message);
+          });
+        }
+        // Update server about the failure
+        if (serverJob.id && serverClient) {
+          await serverClient.updateJobStatus(serverJob.id, 'failed', error.message);
+        }
+      }
+    }
+  }
+}
 
 function createWindow() {
   const isMac = process.platform === 'darwin';
@@ -63,15 +170,26 @@ app.whenReady().then(() => {
     }
   });
 
-  printSpooler.on('job-completed', (job) => {
+  printSpooler.on('job-completed', async (job) => {
+    // Update UI
     if (mainWindow) {
       mainWindow.webContents.send('job-update', { type: 'completed', job });
     }
+    // Update server if this job came from server
+    // Use "printed" status for server (mapped from "completed" in updateJobStatus)
+    if (job.serverJobId && serverClient) {
+      await serverClient.updateJobStatus(job.serverJobId, 'printed');
+    }
   });
 
-  printSpooler.on('job-failed', (job, error) => {
+  printSpooler.on('job-failed', async (job, error) => {
+    // Update UI
     if (mainWindow) {
       mainWindow.webContents.send('job-update', { type: 'failed', job, error });
+    }
+    // Update server if this job came from server
+    if (job.serverJobId && serverClient) {
+      await serverClient.updateJobStatus(job.serverJobId, 'failed', error.message);
     }
   });
   
@@ -79,6 +197,15 @@ app.whenReady().then(() => {
   const apiPort = configManager.get('apiPort', 3001);
   apiServer = new APIServer(apiPort, printSpooler);
   apiServer.start();
+
+  // Initialize server client for remote server integration
+  serverClient = new ServerClient(configManager);
+  
+  // Set up server polling callback
+  serverClient.startPolling(processServerJobs);
+  
+  // Start heartbeat mechanism
+  serverClient.startHeartbeat();
 
   createWindow();
 
@@ -96,6 +223,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  if (serverClient) {
+    serverClient.stop(); // Stops both polling and heartbeat
+  }
   if (printSpooler) {
     printSpooler.shutdown();
   }
@@ -110,7 +240,7 @@ ipcMain.handle('get-printers', async () => {
 });
 
 ipcMain.handle('get-jobs', async () => {
-  return printSpooler.getJobQueue();
+  return printSpooler.getAllJobs(); // Return all jobs including completed ones
 });
 
 ipcMain.handle('get-status', async () => {
@@ -136,6 +266,28 @@ ipcMain.handle('get-config', async () => {
 ipcMain.handle('set-config', async (event, key, value) => {
   configManager.set(key, value);
   return true;
+});
+
+ipcMain.handle('update-server-config', async () => {
+  // Restart server client polling with new config
+  if (serverClient) {
+    serverClient.stop(); // Stop both polling and heartbeat
+    serverClient = new ServerClient(configManager);
+    
+    // Restart polling and heartbeat if server URL is configured
+    if (serverClient.isConfigured()) {
+      serverClient.startPolling(processServerJobs);
+      serverClient.startHeartbeat();
+    }
+  }
+  return true;
+});
+
+ipcMain.handle('test-server-connection', async () => {
+  if (!serverClient) {
+    serverClient = new ServerClient(configManager);
+  }
+  return await serverClient.testConnection();
 });
 
 ipcMain.handle('select-printer', async () => {

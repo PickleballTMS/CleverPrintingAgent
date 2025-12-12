@@ -225,13 +225,34 @@ Configuration is stored in the user data directory and can be modified through t
 To build the application for distribution:
 
 ```bash
+# Build for current platform
 npm run build
+
+# Build for specific platforms
+npm run build:win    # Windows NSIS installer (x64 and x86)
+npm run build:mac    # macOS DMG file
+npm run build:linux  # Linux AppImage
+
+# Build for all platforms
+npm run build:all
 ```
 
 This will create platform-specific installers:
-- Windows: NSIS installer
-- macOS: DMG file
-- Linux: AppImage
+- **Windows**: NSIS installer (`.exe`) - Supports both 64-bit and 32-bit architectures
+  - Allows custom installation directory
+  - Creates desktop and Start Menu shortcuts
+  - Located in `dist/` directory after build
+- **macOS**: DMG file
+- **Linux**: AppImage
+
+### Windows Installer Features
+
+The Windows installer includes:
+- Custom installation directory selection
+- Desktop shortcut creation
+- Start Menu shortcut creation
+- Automatic app launch after installation
+- Uninstaller support
 
 ## Architecture
 
@@ -280,6 +301,21 @@ Ensure the printer is properly installed and accessible on the system. Use the "
 - Verify printer has paper and is not in error state
 - Review error messages in the job details
 - Check system print queue for additional errors
+
+### Windows SmartScreen Warning
+When running the Windows installer or executable, you may see a "Windows protected your PC" warning from Microsoft Defender SmartScreen. This is normal for unsigned applications and does not indicate a problem with the software.
+
+**To proceed:**
+1. Click "More info" in the warning dialog
+2. Click "Run anyway" to continue with the installation/execution
+
+**For production distribution:**
+To avoid this warning for end users, you'll need to code sign the executable with a valid code signing certificate from a trusted Certificate Authority (CA). This requires:
+- Purchasing a code signing certificate (typically $200-400/year)
+- Configuring electron-builder with certificate details
+- Signing during the build process
+
+For internal/testing use, the "Run anyway" option is safe to use.
 
 ## License
 

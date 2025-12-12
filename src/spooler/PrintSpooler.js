@@ -9,6 +9,7 @@ class PrintSpooler extends EventEmitter {
     super();
     this.configManager = configManager;
     this.jobQueue = [];
+    this.jobHistory = []; // Store completed/failed/cancelled jobs for UI display
     this.currentJob = null;
     this.isProcessing = false;
     this.defaultPrinter = configManager.get('defaultPrinter', null);
@@ -340,8 +341,14 @@ class PrintSpooler extends EventEmitter {
       this.emit('job-updated', this.currentJob);
 
       try {
+        // Update status to "printing" when actually starting to print
+        this.currentJob.status = 'printing';
+        this.emit('job-updated', this.currentJob);
+        
         await this.executePrint(this.currentJob);
         this.currentJob.status = 'completed';
+        // Move completed job to history
+        this.jobHistory.push({ ...this.currentJob });
         this.emit('job-completed', this.currentJob);
       } catch (error) {
         console.error('Print job failed:', error);
@@ -358,6 +365,8 @@ class PrintSpooler extends EventEmitter {
           await this.sleep(this.retryDelay);
         } else {
           this.currentJob.status = 'failed';
+          // Move failed job to history
+          this.jobHistory.push({ ...this.currentJob });
           this.emit('job-failed', this.currentJob, error);
         }
       }
@@ -372,17 +381,53 @@ class PrintSpooler extends EventEmitter {
    * Execute the actual print job
    */
   async executePrint(job) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       const { BrowserWindow } = require('electron');
-      const printWindow = new BrowserWindow({ show: false });
+      let timeoutHandle = null;
 
       // Handle PDF files (priority)
       if (job.data.pdf || job.data.pdfBase64 || job.data.pdfPath || job.data.pdfUrl) {
+        // For PDF files, we need to ensure we have a file path
+        // If we have pdfPath directly, use it; otherwise load/save to get a file path
+        let pdfFilePath = null;
+        
+        if (job.data.pdfPath && fs.existsSync(job.data.pdfPath)) {
+          // Direct file path - use it
+          pdfFilePath = job.data.pdfPath;
+        } else {
+          // Need to load/save PDF to get a file path
+          // This handles pdfBase64, pdf, and pdfUrl
+          try {
+            await this.loadPDFForPrinting(null, job.data); // Pass null - we don't need BrowserWindow
+            pdfFilePath = job.data._tempPdfPath || job.data.pdfPath;
+          } catch (error) {
+            reject(error);
+            return;
+          }
+        }
+        
+        if (!pdfFilePath || !fs.existsSync(pdfFilePath)) {
+          reject(new Error('PDF file path not available or file does not exist'));
+          return;
+        }
+        
+        // Use hidden BrowserWindow with plugins enabled so Chromium PDF viewer renders the PDF
+        const printWindow = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            plugins: true
+          }
+        });
         this.loadPDFForPrinting(printWindow, job.data)
           .then(() => {
+            // PDF has its own timeout handler in printPDF, so we don't need one here
             this.printPDF(printWindow, job.data, resolve, reject);
           })
-          .catch(reject);
+          .catch((error) => {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            printWindow.close();
+            reject(error);
+          });
         return;
       }
 
@@ -399,7 +444,7 @@ class PrintSpooler extends EventEmitter {
 
       printWindow.webContents.once('did-finish-load', () => {
         const options = {
-          silent: true,
+          silent: false,
           printBackground: job.data.printBackground !== false,
           deviceName: job.data.printerName || this.defaultPrinter || undefined,
           pageSize: job.data.pageSize || 'A4',
@@ -409,8 +454,16 @@ class PrintSpooler extends EventEmitter {
           copies: job.data.copies || 1
         };
 
+        printWindow.webContents.on('did-stop-loading', () => {
+          console.log('PDF fully stopped loading');
+        });
+
         printWindow.webContents.print(options, (success, failureReason) => {
           printWindow.close();
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+          }
           
           if (success) {
             resolve();
@@ -421,12 +474,13 @@ class PrintSpooler extends EventEmitter {
       });
 
       printWindow.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         printWindow.close();
         reject(new Error(`Failed to load content: ${errorDescription}`));
       });
 
-      // Timeout after 30 seconds
-      setTimeout(() => {
+      // Timeout after 30 seconds (only for HTML/URL content, not PDFs)
+      timeoutHandle = setTimeout(() => {
         if (!printWindow.isDestroyed()) {
           printWindow.close();
           reject(new Error('Print job timeout'));
@@ -465,9 +519,30 @@ class PrintSpooler extends EventEmitter {
           const tempFileName = `print_job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.pdf`;
           pdfPath = path.join(tempDir, tempFileName);
           
-          fs.writeFileSync(pdfPath, pdfData);
+          // Write PDF file - ensure we're writing binary data correctly
+          // Use 'binary' encoding flag to ensure no text encoding issues
+          fs.writeFileSync(pdfPath, pdfData, { encoding: null, flag: 'w' });
+          
+          // Verify the written file matches what we intended to write
+          const writtenBuffer = fs.readFileSync(pdfPath);
+          if (writtenBuffer.length !== pdfData.length) {
+            console.error('PDF file size mismatch after write!');
+            console.error('  - Expected:', pdfData.length, 'bytes');
+            console.error('  - Written:', writtenBuffer.length, 'bytes');
+          }
+          
+          // Ensure file has read permissions (not execute - not needed for PDFs)
+          // 0o644 = rw-r--r-- (read/write for owner, read for group/others)
+          try {
+            fs.chmodSync(pdfPath, 0o644);
+          } catch (chmodError) {
+            // chmod may fail on some systems, but file should still be readable
+            console.warn('Could not set file permissions (file should still be readable):', chmodError.message);
+          }
+          
           // Store temp file path for cleanup
           jobData._tempPdfPath = pdfPath;
+          console.log('PDF saved successfully:', pdfPath, '(' + pdfData.length + ' bytes)');
         } catch (error) {
           reject(new Error(`Failed to process PDF data: ${error.message}`));
           return;
@@ -481,8 +556,10 @@ class PrintSpooler extends EventEmitter {
         const parsedUrl = new url.URL(jobData.pdfUrl);
         const client = parsedUrl.protocol === 'https:' ? https : http;
         
-        client.get(jobData.pdfUrl, (response) => {
+        let downloadTimeout = null;
+        const req = client.get(jobData.pdfUrl, (response) => {
           if (response.statusCode !== 200) {
+            if (downloadTimeout) clearTimeout(downloadTimeout);
             reject(new Error(`Failed to download PDF: HTTP ${response.statusCode}`));
             return;
           }
@@ -490,41 +567,89 @@ class PrintSpooler extends EventEmitter {
           const chunks = [];
           response.on('data', (chunk) => chunks.push(chunk));
           response.on('end', () => {
+            if (downloadTimeout) clearTimeout(downloadTimeout);
             try {
               pdfData = Buffer.concat(chunks);
               const tempDir = app.getPath('temp');
               const tempFileName = `print_job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.pdf`;
               pdfPath = path.join(tempDir, tempFileName);
+              console.log('Saving PDF to:', pdfPath);
+              // Write PDF file - ensure we're writing binary data correctly
+              fs.writeFileSync(pdfPath, pdfData, { encoding: null, flag: 'w' });
               
-              fs.writeFileSync(pdfPath, pdfData);
+              // Verify the written file
+              const writtenBuffer = fs.readFileSync(pdfPath);
+              if (writtenBuffer.length !== pdfData.length) {
+                console.error('PDF file size mismatch after write!');
+                console.error('  - Expected:', pdfData.length, 'bytes');
+                console.error('  - Written:', writtenBuffer.length, 'bytes');
+              }
+              
+              // Ensure file has read permissions (not execute - not needed for PDFs)
+              // 0o644 = rw-r--r-- (read/write for owner, read for group/others)
+              try {
+                fs.chmodSync(pdfPath, 0o644);
+              } catch (chmodError) {
+                // chmod may fail on some systems, but file should still be readable
+                console.warn('Could not set file permissions (file should still be readable):', chmodError.message);
+              }
               jobData._tempPdfPath = pdfPath;
+              console.log('PDF downloaded and saved successfully:', pdfPath, '(' + pdfData.length + ' bytes)');
               resolve();
             } catch (error) {
               reject(new Error(`Failed to save downloaded PDF: ${error.message}`));
             }
           });
-        }).on('error', (error) => {
+        });
+        
+        req.on('error', (error) => {
+          if (downloadTimeout) clearTimeout(downloadTimeout);
           reject(new Error(`Failed to download PDF: ${error.message}`));
         });
+        
+        // Set timeout for download (30 seconds)
+        downloadTimeout = setTimeout(() => {
+          req.destroy();
+          reject(new Error('PDF download timeout - download took too long'));
+        }, 30000);
+        
         return;
       } else {
         reject(new Error('No valid PDF source provided'));
         return;
       }
 
-      // Load PDF file
+      // Load PDF file (only if printWindow is provided)
       if (pdfPath) {
-        // Use file:// protocol to load PDF
+        // If no printWindow provided, we're just getting the file path - resolve immediately
+        if (!printWindow) {
+          resolve();
+          return;
+        }
+        
+        // Use file:// protocol to load PDF into BrowserWindow
         const fileUrl = `file://${pdfPath}`;
+        let loadTimeout = null;
+        
         printWindow.loadURL(fileUrl);
         
-        printWindow.webContents.once('did-finish-load', () => {
-          resolve();
+        printWindow.webContents.once('dom-ready', () => {
+          // Chromium PDF viewer needs extra time to fully render
+          setTimeout(() => {
+            if (loadTimeout) clearTimeout(loadTimeout);
+            resolve();
+          }, 1500);
         });
         
         printWindow.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+          if (loadTimeout) clearTimeout(loadTimeout);
           reject(new Error(`Failed to load PDF: ${errorDescription}`));
         });
+        
+        // Timeout for loading PDF (20 seconds should be enough)
+        loadTimeout = setTimeout(() => {
+          reject(new Error('PDF load timeout - PDF took too long to load'));
+        }, 20000);
       }
     });
   }
@@ -533,54 +658,73 @@ class PrintSpooler extends EventEmitter {
    * Print PDF
    */
   printPDF(printWindow, jobData, resolve, reject) {
-    // Wait a bit for PDF to fully render
-    setTimeout(() => {
-      const options = {
-        silent: true,
-        printBackground: jobData.printBackground !== false,
-        deviceName: jobData.printerName || this.defaultPrinter || undefined,
-        pageSize: jobData.pageSize || 'A4',
-        margins: jobData.margins || {
-          marginType: 'default'
-        },
-        copies: jobData.copies || 1
-      };
+    const { exec } = require('child_process');
 
-      printWindow.webContents.print(options, (success, failureReason) => {
-        // Clean up temporary PDF file if created
-        if (jobData._tempPdfPath && fs.existsSync(jobData._tempPdfPath)) {
-          try {
-            fs.unlinkSync(jobData._tempPdfPath);
-          } catch (error) {
-            console.warn('Failed to delete temp PDF file:', error);
-          }
-        }
-        
-        printWindow.close();
-        
-        if (success) {
-          resolve();
-        } else {
-          reject(new Error(failureReason || 'Print failed'));
-        }
-      });
-    }, 1000); // Give PDF time to render
+    const pdfPath = jobData._tempPdfPath || jobData.pdfPath;
 
-    // Timeout after 30 seconds
-    setTimeout(() => {
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
       if (!printWindow.isDestroyed()) {
-        // Clean up temp file
-        if (jobData._tempPdfPath && fs.existsSync(jobData._tempPdfPath)) {
-          try {
-            fs.unlinkSync(jobData._tempPdfPath);
-          } catch (error) {
-            console.warn('Failed to delete temp PDF file:', error);
-          }
-        }
         printWindow.close();
-        reject(new Error('Print job timeout'));
       }
-    }, 30000);
+      reject(new Error('PDF file not found for printing'));
+      return;
+    }
+
+    const platform = process.platform;
+    let command = '';
+
+    try {
+      if (platform === 'darwin' || platform === 'linux') {
+        // macOS / Linux → CUPS (lp)
+        const printer = jobData.printerName || this.defaultPrinter;
+        const copies = jobData.copies || 1;
+
+        command = printer
+          ? `lp -d "${printer}" -n ${copies} "${pdfPath}"`
+          : `lp -n ${copies} "${pdfPath}"`;
+      } 
+      else if (platform === 'win32') {
+        // Windows → native print command
+        const printer = jobData.printerName || this.defaultPrinter;
+
+        // Windows print requires quoted paths and optional printer
+        command = printer
+          ? `print /D:"${printer}" "${pdfPath}"`
+          : `print "${pdfPath}"`;
+      } 
+      else {
+        throw new Error(`Unsupported platform: ${platform}`);
+      }
+
+      console.log('Executing native print command:', command);
+
+      exec(command, { timeout: 30000 }, (error, stdout, stderr) => {
+        if (error) {
+          console.error('Native print failed:', stderr || error.message);
+          if (!printWindow.isDestroyed()) {
+            printWindow.close();
+          }
+          reject(new Error(stderr || error.message));
+          return;
+        }
+
+        // Cleanup temp file
+        if (jobData._tempPdfPath && fs.existsSync(jobData._tempPdfPath)) {
+          try { fs.unlinkSync(jobData._tempPdfPath); } catch {}
+        }
+
+        if (!printWindow.isDestroyed()) {
+          printWindow.close();
+        }
+
+        resolve();
+      });
+    } catch (err) {
+      if (!printWindow.isDestroyed()) {
+        printWindow.close();
+      }
+      reject(err);
+    }
   }
 
   /**
@@ -595,10 +739,27 @@ class PrintSpooler extends EventEmitter {
   }
 
   /**
-   * Get all jobs (including completed/failed)
+   * Get all jobs (including completed/failed from history)
    */
   getAllJobs() {
-    return this.getJobQueue();
+    const activeJobs = this.getJobQueue();
+    // Combine active jobs with history, removing duplicates by ID
+    const allJobsMap = new Map();
+    
+    // Add history jobs first (older)
+    this.jobHistory.forEach(job => {
+      allJobsMap.set(job.id, job);
+    });
+    
+    // Add/update with active jobs (newer, may override history if job was retried)
+    activeJobs.forEach(job => {
+      allJobsMap.set(job.id, job);
+    });
+    
+    // Convert to array and sort by timestamp (newest first)
+    return Array.from(allJobsMap.values()).sort((a, b) => {
+      return new Date(b.timestamp) - new Date(a.timestamp);
+    });
   }
 
   /**
@@ -609,12 +770,16 @@ class PrintSpooler extends EventEmitter {
     if (jobIndex !== -1) {
       const job = this.jobQueue.splice(jobIndex, 1)[0];
       job.status = 'cancelled';
+      // Move cancelled job to history
+      this.jobHistory.push({ ...job });
       this.emit('job-updated', job);
       return true;
     }
     
     if (this.currentJob && this.currentJob.id === jobId) {
       this.currentJob.status = 'cancelled';
+      // Move cancelled job to history
+      this.jobHistory.push({ ...this.currentJob });
       this.emit('job-updated', this.currentJob);
       this.currentJob = null;
       // Continue processing queue
@@ -653,14 +818,13 @@ class PrintSpooler extends EventEmitter {
   }
 
   /**
-   * Clear completed jobs
+   * Clear completed jobs from history
    */
   clearCompletedJobs() {
-    // In a real implementation, you'd maintain a separate history
-    // For now, we just remove completed jobs from queue
-    const initialLength = this.jobQueue.length;
-    this.jobQueue = this.jobQueue.filter(job => job.status !== 'completed');
-    return initialLength - this.jobQueue.length;
+    const initialLength = this.jobHistory.length;
+    // Remove completed jobs from history (keep failed/cancelled for reference)
+    this.jobHistory = this.jobHistory.filter(job => job.status !== 'completed');
+    return initialLength - this.jobHistory.length;
   }
 
   /**
@@ -670,6 +834,7 @@ class PrintSpooler extends EventEmitter {
     return {
       isProcessing: this.isProcessing,
       queueLength: this.jobQueue.length,
+      maxQueueSize: this.maxQueueSize,
       currentJob: this.currentJob ? {
         id: this.currentJob.id,
         status: this.currentJob.status
